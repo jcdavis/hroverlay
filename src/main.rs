@@ -9,7 +9,7 @@ use btleplug::bluez::{adapter::ConnectedAdapter, manager::Manager};
 use btleplug::winrtble::{adapter::Adapter, manager::Manager};
 #[cfg(target_os = "macos")]
 use btleplug::corebluetooth::{adapter::Adapter, manager::Manager};
-use btleplug::api::{UUID, Central, Peripheral};
+use btleplug::api::{UUID, Central, Peripheral, NotificationHandler};
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 fn get_central(manager: &Manager) -> Adapter {
@@ -24,6 +24,7 @@ fn get_central(manager: &Manager) -> ConnectedAdapter {
     adapter.connect().unwrap()
 }
 
+
 fn main() {
     let manager = Manager::new().unwrap();
 
@@ -36,14 +37,23 @@ fn main() {
 
     thread::sleep(Duration::from_secs(2));
 
-    /*let ohr = central.peripherals().into_iter().find(|p| {
+    let ohr = central.peripherals().into_iter().find(|p| {
         p.properties().local_name.map(|n| n.starts_with("Polar OH1")).unwrap_or(false)
     }).unwrap();
 
-    println!("{:?}", ohr.discover_characteristics());*/
+    ohr.connect().expect("Couldn't connect");
+    let mut bytes: [u8; 16] = [0x00,0x00,0x2A,0x37,0x00,0x00,0x10,0x00,0x80,0x00,0x00,0x80,0x5F,0x9B,0x34,0xFB];
+    bytes.reverse();
+    let uuid = UUID::B128(bytes);
+    let chars = ohr.discover_characteristics().expect("Couldn't discover characteristics");
+    let hr_char = chars.iter().find(|c| c.uuid == uuid).expect("couldn't find HR characteristic");
 
-    for per in &central.peripherals() {
-        let chars = per.discover_characteristics().unwrap_or_default();
-        println!("{:?}, {:?}", per, chars);
+    let handler: NotificationHandler = Box::new(|not| {
+        println!("{:?}", not.value);
+    });
+    ohr.on_notification(handler);
+    ohr.subscribe(hr_char).expect("Couldn't subscribe");
+    loop {
+
     }
 }
