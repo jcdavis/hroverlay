@@ -8,3 +8,4 @@ edition = "2018"
 
 [dependencies]
 btleplug = "0.5.4"
+native-windows-gui = "1.0.7"
