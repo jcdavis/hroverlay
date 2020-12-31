@@ -59,8 +59,8 @@ mod basic_app_ui {
             // Controls
             nwg::Window::builder()
                 .flags(nwg::WindowFlags::WINDOW | nwg::WindowFlags::VISIBLE)
-                .size((300, 115))
-                .position((300, 300))
+                .size((100, 50))
+                .topmost(true)
                 .title("Basic example")
                 .build(&mut data.window)?;
 
@@ -88,10 +88,6 @@ mod basic_app_ui {
             let handle_events = move |evt, _evt_data, handle| {
                 if let Some(evt_ui) = evt_ui.upgrade() {
                     match evt {
-                        /*E::OnButtonClick =>
-                            if &handle == &evt_ui.hello_button {
-                                BasicApp::say_hello(&evt_ui);
-                            },*/
                         E::OnTimerTick => {
                                 BasicApp::draw_hr(&evt_ui);
                             }
