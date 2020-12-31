@@ -4,26 +4,21 @@ extern crate native_windows_gui as nwg;
 use std::thread;
 use std::time::Duration;
 
-use btleplug::winrtble::{adapter::Adapter, manager::Manager};
-use btleplug::api::{UUID, Central, Peripheral, NotificationHandler, ValueNotification};
-use crate::nwg::NativeUi;
+use btleplug::winrtble::manager::Manager;
+use btleplug::api::{UUID, Central, Peripheral};
+use nwg::NativeUi;
+use std::env;
 use std::sync::Arc;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 static HR_COUNT: AtomicU8 = AtomicU8::new(0);
 
-fn get_central(manager: &Manager) -> Adapter {
-    let adapters = manager.adapters().unwrap();
-    adapters.into_iter().nth(0).unwrap()
-}
-
 #[derive(Default)]
 pub struct BasicApp {
     window: nwg::Window,
     layout: nwg::GridLayout,
     hr: nwg::TextInput,
-    timer: nwg::Timer,
 }
 
 impl BasicApp {
@@ -74,7 +69,7 @@ mod basic_app_ui {
                 .parent(Some(data.window.handle))
                 .stopped(false)
                 .interval(5)
-                .build();
+                .build()?;
 
 
             // Wrap-up
@@ -132,39 +127,55 @@ mod basic_app_ui {
     }
 }
 
-fn main() {
-    let manager = Manager::new().unwrap();
+fn create_bt_updater() -> Result<(), &'static str> {
+    let manager = Manager::new().map_err(|_e| "No manager")?;
+    let adapters = manager.adapters().map_err(|_e| "Couldn't find adapter")?;
+    let adapter = adapters.get(0).ok_or("Couldn't find adapter")?;
 
-    let central = get_central(&manager);
-
-    central.start_scan().unwrap();
-
+    adapter.start_scan().map_err(|_e|"couldn't scan BT")?;
     thread::sleep(Duration::from_secs(2));
 
-    let ohr = central.peripherals().into_iter().find(|p| {
+    let ohr = adapter.peripherals().into_iter().find(|p| {
         p.properties().local_name.map(|n| n.starts_with("Polar OH1")).unwrap_or(false)
-    }).expect("Couldn't find the HRM");
+    }).ok_or("Couldn't find HRM")?;
 
-    ohr.connect().expect("Couldn't connect");
+    ohr.connect().map_err(|_e| "Couldn't connect")?;
     let mut bytes: [u8; 16] = [0x00,0x00,0x2A,0x37,0x00,0x00,0x10,0x00,0x80,0x00,0x00,0x80,0x5F,0x9B,0x34,0xFB];
     bytes.reverse();
     let uuid = UUID::B128(bytes);
-    let chars = ohr.discover_characteristics().expect("Couldn't discover characteristics");
-    let hr_char = chars.iter().find(|c| c.uuid == uuid).expect("couldn't find HR characteristic");
+    let chars = ohr.discover_characteristics().map_err(|_e| "Couldn't discover characteristics")?;
+    let hr_char = chars.iter().find(|c| c.uuid == uuid).ok_or("couldn't find HR characteristic")?;
 
+    ohr.on_notification(Box::new(|not| {
+        println!("{:?}", not.value);
+        HR_COUNT.store(not.value[1], Ordering::SeqCst);
+    }));
+    ohr.subscribe(hr_char).expect("Couldn't subscribe");
+    Ok(())
+}
+
+fn create_dummy_updater() {
+    thread::spawn(|| {
+        let mut count: i64 = 0;
+        loop {
+            let r: u8 = (count % 200) as u8;
+            HR_COUNT.store(r, Ordering::SeqCst);
+            thread::sleep(Duration::from_millis(100));
+            count += 1;
+        }
+    });
+}
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    if args.len() > 1 {
+        create_dummy_updater();
+    } else {
+        create_bt_updater().unwrap();
+    }
     nwg::init().expect("Failed to init Native Windows GUI");
     nwg::Font::set_global_family("Segoe UI").expect("Failed to set default font");
     let _ui = Arc::new(BasicApp::build_ui(Default::default()).expect("Failed to build UI"));
 
-    let handler: Box<dyn FnMut(ValueNotification) + Send> = Box::new(|not| {
-        println!("{:?}", not.value);
-        HR_COUNT.store(not.value[1], Ordering::SeqCst);
-    });
-    ohr.on_notification(handler);
-    ohr.subscribe(hr_char).expect("Couldn't subscribe");
-
     nwg::dispatch_thread_events();
-    loop {
-
-    }
 }
