@@ -8,21 +8,21 @@ use btleplug::winrtble::manager::Manager;
 use btleplug::api::{UUID, Central, Peripheral};
 use nwg::NativeUi;
 use std::env;
-use std::sync::Arc;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
+// The BTLE notification callback requires 'static for some reason :|
 static HR_COUNT: AtomicU8 = AtomicU8::new(0);
 
 #[derive(Default)]
-pub struct BasicApp {
+pub struct HRViewer {
     window: nwg::Window,
     layout: nwg::GridLayout,
     font: nwg::Font,
     hr: nwg::TextInput,
 }
 
-impl BasicApp {
+impl HRViewer {
     fn draw_hr(&self) {
         match HR_COUNT.load(Ordering::SeqCst) {
             0 => {
@@ -37,34 +37,31 @@ impl BasicApp {
     fn exit(&self) {
         nwg::stop_thread_dispatch();
     }
-
 }
 
-
+/*
+ * This mostly is copy-pasted from the basic layout example:
+ * https://github.com/gabdube/native-windows-gui/blob/master/native-windows-gui/examples/basic_layout.rs
+ * There are nice macros to do most of this for you, but we need to do custom hacks so not an option
+ */
 mod basic_app_ui {
     use native_windows_gui as nwg;
     use super::*;
     use std::cell::RefCell;
     use std::ops::Deref;
     use nwg::{ControlBase, NwgError};
-    use winapi::um::winuser::{WS_CLIPCHILDREN, WS_VISIBLE, WS_EX_TOPMOST, WS_EX_LAYERED, WS_BORDER, WS_CAPTION, WS_SYSMENU, WS_POPUP, SetLayeredWindowAttributes, LWA_COLORKEY};
+    use winapi::um::winuser::{WS_CLIPCHILDREN, WS_VISIBLE, WS_EX_TOPMOST, WS_EX_LAYERED, WS_POPUP, SetLayeredWindowAttributes, LWA_COLORKEY};
 
-    pub struct BasicAppUi {
-        inner: Rc<BasicApp>,
+    pub struct HRViewerUi {
+        inner: Rc<HRViewer>,
         default_handler: RefCell<Option<nwg::EventHandler>>
     }
 
-    impl nwg::NativeUi<BasicAppUi> for BasicApp {
-        fn build_ui(mut data: BasicApp) -> Result<BasicAppUi, nwg::NwgError> {
+    impl nwg::NativeUi<HRViewerUi> for HRViewer {
+        fn build_ui(mut data: HRViewer) -> Result<HRViewerUi, nwg::NwgError> {
             use nwg::Event as E;
 
             // Controls
-            /*nwg::Window::builder()
-                .flags(nwg::WindowFlags::WINDOW | nwg::WindowFlags::VISIBLE)
-                .size((100, 100))
-                .topmost(true)
-                .title("Basic example")
-                .build(&mut data.window)?;*/
             data.window = Default::default();
             data.window.handle = ControlBase::build_hwnd()
                 .class_name("NativeWindowsGuiWindow")
@@ -98,7 +95,7 @@ mod basic_app_ui {
 
 
             // Wrap-up
-            let ui = BasicAppUi {
+            let ui = HRViewerUi {
                 inner: Rc::new(data),
                 default_handler: Default::default(),
             };
@@ -109,11 +106,11 @@ mod basic_app_ui {
                 if let Some(evt_ui) = evt_ui.upgrade() {
                     match evt {
                         E::OnTimerTick => {
-                                BasicApp::draw_hr(&evt_ui);
+                                HRViewer::draw_hr(&evt_ui);
                             }
                         E::OnWindowClose =>
                             if &handle == &evt_ui.window {
-                                BasicApp::exit(&evt_ui);
+                                HRViewer::exit(&evt_ui);
                             },
                         _ => {}
                     }
@@ -130,21 +127,22 @@ mod basic_app_ui {
                 .child(0, 0, &ui.hr)
                 .build(&ui.layout)?;
 
-                match ui.window.handle {
-                    nwg::ControlHandle::Hwnd(hwnd) => {
-                        unsafe {
-                            SetLayeredWindowAttributes(hwnd, 0x000000FF, 0, LWA_COLORKEY);
-                        }
-                    }
-                    _ => {
-                        return Err(NwgError::InitializationError("??".to_string()));
+            // We set the background color of the text box as red, mark as transparent
+            match ui.window.handle {
+                nwg::ControlHandle::Hwnd(hwnd) => {
+                    unsafe {
+                        SetLayeredWindowAttributes(hwnd, 0x000000FF, 0, LWA_COLORKEY);
                     }
                 }
+                _ => {
+                    return Err(NwgError::InitializationError("??".to_string()));
+                }
+            }
             return Ok(ui);
         }
     }
 
-    impl Drop for BasicAppUi {
+    impl Drop for HRViewerUi {
         /// To make sure that everything is freed without issues, the default handler must be unbound.
         fn drop(&mut self) {
             let handler = self.default_handler.borrow();
@@ -154,10 +152,10 @@ mod basic_app_ui {
         }
     }
 
-    impl Deref for BasicAppUi {
-        type Target = BasicApp;
+    impl Deref for HRViewerUi {
+        type Target = HRViewer;
 
-        fn deref(&self) -> &BasicApp {
+        fn deref(&self) -> &HRViewer {
             &self.inner
         }
     }
@@ -214,8 +212,7 @@ fn main() {
         create_bt_updater().unwrap();
     }
     nwg::init().expect("Failed to init Native Windows GUI");
-    nwg::Font::set_global_family("Segoe UI").expect("Failed to set default font");
-    let _ui = Arc::new(BasicApp::build_ui(Default::default()).expect("Failed to build UI"));
+    let _ui = HRViewer::build_ui(Default::default()).expect("Failed to build UI");
 
     nwg::dispatch_thread_events();
 }
