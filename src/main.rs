@@ -164,6 +164,7 @@ mod basic_app_ui {
     }
 }
 
+// Very hacky - hardcodes the device type, doesn't handle disconnects etc
 fn create_bt_updater() -> Result<(), &'static str> {
     let manager = Manager::new().map_err(|_e| "No manager")?;
     let adapters = manager.adapters().map_err(|_e| "Couldn't find adapter")?;
@@ -175,6 +176,8 @@ fn create_bt_updater() -> Result<(), &'static str> {
     let ohr = adapter.peripherals().into_iter().find(|p| {
         p.properties().local_name.map(|n| n.starts_with("Polar OH1")).unwrap_or(false)
     }).ok_or("Couldn't find HRM")?;
+
+    adapter.stop_scan().map_err(|_e| "??")?;
 
     ohr.connect().map_err(|_e| "Couldn't connect")?;
     // 0x2A37 is the heart rate measurement characteristic
