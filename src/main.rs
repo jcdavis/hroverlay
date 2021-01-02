@@ -18,29 +18,36 @@ static HR_COUNT: AtomicU8 = AtomicU8::new(0);
 pub struct BasicApp {
     window: nwg::Window,
     layout: nwg::GridLayout,
+    font: nwg::Font,
     hr: nwg::TextInput,
 }
 
 impl BasicApp {
     fn draw_hr(&self) {
-        let value: u8 = HR_COUNT.load(Ordering::Relaxed);
-        self.hr.set_text(value.to_string().as_str());
+        match HR_COUNT.load(Ordering::SeqCst) {
+            0 => {
+                self.hr.set_text("--");
+            }
+            rest => {
+                self.hr.set_text(rest.to_string().as_str());
+            }
+        }
     }
 
-    fn say_goodbye(&self) {
+    fn exit(&self) {
         nwg::stop_thread_dispatch();
     }
 
 }
 
-//
-// ALL of this stuff is handled by native-windows-derive
-//
+
 mod basic_app_ui {
     use native_windows_gui as nwg;
     use super::*;
     use std::cell::RefCell;
     use std::ops::Deref;
+    use nwg::{ControlBase, NwgError};
+    use winapi::um::winuser::{WS_CLIPCHILDREN, WS_VISIBLE, WS_EX_TOPMOST, WS_EX_LAYERED, WS_BORDER, WS_CAPTION, WS_SYSMENU, WS_POPUP, SetLayeredWindowAttributes, LWA_COLORKEY};
 
     pub struct BasicAppUi {
         inner: Rc<BasicApp>,
@@ -52,23 +59,41 @@ mod basic_app_ui {
             use nwg::Event as E;
 
             // Controls
-            nwg::Window::builder()
+            /*nwg::Window::builder()
                 .flags(nwg::WindowFlags::WINDOW | nwg::WindowFlags::VISIBLE)
-                .size((100, 50))
+                .size((100, 100))
                 .topmost(true)
                 .title("Basic example")
-                .build(&mut data.window)?;
+                .build(&mut data.window)?;*/
+            data.window = Default::default();
+            data.window.handle = ControlBase::build_hwnd()
+                .class_name("NativeWindowsGuiWindow")
+                .forced_flags(WS_CLIPCHILDREN)
+                .ex_flags(WS_EX_TOPMOST | WS_EX_LAYERED)
+                .flags(WS_POPUP | WS_VISIBLE)
+                .size((100, 100))
+                .position((1820, 1100))
+                .build()?;
+
+            nwg::Font::builder()
+                .family("Arial")
+                .size(50)
+                .weight(5)
+                .build(&mut data.font)?;
 
             nwg::TextInput::builder()
                 .text("--")
+                .size((100, 120))
                 .parent(&data.window)
+                .font(Some(&data.font))
+                .background_color(Some([255, 0, 0]))
                 .readonly(true)
                 .build(&mut data.hr)?;
 
             nwg::ControlBase::build_timer()
                 .parent(Some(data.window.handle))
                 .stopped(false)
-                .interval(5)
+                .interval(500)
                 .build()?;
 
 
@@ -88,7 +113,7 @@ mod basic_app_ui {
                             }
                         E::OnWindowClose =>
                             if &handle == &evt_ui.window {
-                                BasicApp::say_goodbye(&evt_ui);
+                                BasicApp::exit(&evt_ui);
                             },
                         _ => {}
                     }
@@ -100,10 +125,21 @@ mod basic_app_ui {
             // Layouts
             nwg::GridLayout::builder()
                 .parent(&ui.window)
-                .spacing(1)
+                .spacing(0)
+                .margin([0, 0, 0, 0])
                 .child(0, 0, &ui.hr)
                 .build(&ui.layout)?;
 
+                match ui.window.handle {
+                    nwg::ControlHandle::Hwnd(hwnd) => {
+                        unsafe {
+                            SetLayeredWindowAttributes(hwnd, 0x000000FF, 0, LWA_COLORKEY);
+                        }
+                    }
+                    _ => {
+                        return Err(NwgError::InitializationError("??".to_string()));
+                    }
+                }
             return Ok(ui);
         }
     }
@@ -147,8 +183,12 @@ fn create_bt_updater() -> Result<(), &'static str> {
     let hr_char = chars.iter().find(|c| c.uuid == uuid).ok_or("couldn't find HR characteristic")?;
 
     ohr.on_notification(Box::new(|not| {
-        println!("{:?}", not.value);
-        HR_COUNT.store(not.value[1], Ordering::SeqCst);
+        let hr: u8 = if not.value[0] != 0 {
+            0
+        } else {
+            not.value[1]
+        };
+        HR_COUNT.store(hr, Ordering::SeqCst);
     }));
     ohr.subscribe(hr_char).expect("Couldn't subscribe");
     Ok(())
