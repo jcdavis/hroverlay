@@ -19,7 +19,7 @@ pub struct HRViewer {
     window: nwg::Window,
     layout: nwg::GridLayout,
     font: nwg::Font,
-    hr: nwg::TextInput,
+    hr: nwg::Label,
 }
 
 impl HRViewer {
@@ -71,7 +71,7 @@ mod basic_app_ui {
                 .flags(WS_POPUP | WS_VISIBLE)
                 .size((100, 100))
                 //TODO: figure out how to not hardcode this
-                .position((1820, 1100))
+                .position((0, 0))
                 .build()?;
 
             nwg::Font::builder()
@@ -80,14 +80,13 @@ mod basic_app_ui {
                 .weight(700)
                 .build(&mut data.font)?;
 
-            nwg::TextInput::builder()
+            nwg::Label::builder()
                 .text("--")
                 .size((100, 120))
                 .parent(&data.window)
                 .font(Some(&data.font))
-                .align(HTextAlign::Right)
+                .h_align(HTextAlign::Right)
                 .background_color(Some([255, 0, 0]))
-                .readonly(true)
                 .build(&mut data.hr)?;
 
             nwg::ControlBase::build_timer()
