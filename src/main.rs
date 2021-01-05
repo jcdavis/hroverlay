@@ -10,9 +10,7 @@ use nwg::NativeUi;
 use std::env;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU8, Ordering};
-
-// The BTLE notification callback requires 'static for some reason :|
-static HR_COUNT: AtomicU8 = AtomicU8::new(0);
+use std::sync::Arc;
 
 #[derive(Default)]
 pub struct HRViewer {
@@ -20,11 +18,12 @@ pub struct HRViewer {
     layout: nwg::GridLayout,
     font: nwg::Font,
     hr: nwg::TextInput,
+    hr_count: Arc<AtomicU8>,
 }
 
 impl HRViewer {
     fn draw_hr(&self) {
-        match HR_COUNT.load(Ordering::SeqCst) {
+        match self.hr_count.load(Ordering::SeqCst) {
             0 => {
                 self.hr.set_text("--");
             }
@@ -165,7 +164,7 @@ mod basic_app_ui {
 }
 
 // Very hacky - hardcodes the device type, doesn't handle disconnects etc
-fn create_bt_updater() -> Result<(), &'static str> {
+fn create_bt_updater(viewer: &HRViewer) -> Result<(), &'static str> {
     let manager = Manager::new().map_err(|_e| "No manager")?;
     let adapters = manager.adapters().map_err(|_e| "Couldn't find adapter")?;
     let adapter = adapters.get(0).ok_or("Couldn't find adapter")?;
@@ -188,25 +187,27 @@ fn create_bt_updater() -> Result<(), &'static str> {
     let chars = ohr.discover_characteristics().map_err(|_e| "Couldn't discover characteristics")?;
     let hr_char = chars.iter().find(|c| c.uuid == uuid).ok_or("couldn't find HR characteristic")?;
 
-    ohr.on_notification(Box::new(|not| {
+    let count_atomic = viewer.hr_count.clone();
+    ohr.on_notification(Box::new(move |not| {
         let hr: u8 = if not.value[0] != 0 {
             0
         } else {
             not.value[1]
         };
-        HR_COUNT.store(hr, Ordering::SeqCst);
+        count_atomic.store(hr, Ordering::SeqCst);
     }));
     ohr.subscribe(hr_char).expect("Couldn't subscribe");
     Ok(())
 }
 
 // For basic UI testing. Just throws a bunch of data in the 0-199 range as a placeholder
-fn create_dummy_updater() {
-    thread::spawn(|| {
+fn create_dummy_updater(viewer: &HRViewer) {
+    let count_atomic = viewer.hr_count.clone();
+    thread::spawn(move || {
         let mut count: i64 = 0;
         loop {
             let r: u8 = (count % 200) as u8;
-            HR_COUNT.store(r, Ordering::SeqCst);
+            count_atomic.store(r, Ordering::SeqCst);
             thread::sleep(Duration::from_millis(100));
             count += 1;
         }
@@ -215,13 +216,14 @@ fn create_dummy_updater() {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    let viewer: HRViewer = Default::default();
     if args.len() > 1 {
-        create_dummy_updater();
+        create_dummy_updater(&viewer);
     } else {
-        create_bt_updater().unwrap();
+        create_bt_updater(&viewer).unwrap();
     }
     nwg::init().expect("Failed to init Native Windows GUI");
-    let _ui = HRViewer::build_ui(Default::default()).expect("Failed to build UI");
+    let _ui = HRViewer::build_ui(viewer).expect("Failed to build UI");
 
     nwg::dispatch_thread_events();
 }
