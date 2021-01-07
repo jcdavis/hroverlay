@@ -1,27 +1,68 @@
 extern crate btleplug;
 extern crate native_windows_gui as nwg;
+extern crate native_windows_derive as nwd;
 
 use std::thread;
 use std::time::Duration;
 
 use btleplug::winrtble::manager::Manager;
 use btleplug::api::{UUID, Central, Peripheral};
+use nwd::NwgUi;
 use nwg::NativeUi;
+use winapi::um::winuser::{WS_EX_TOPMOST, WS_EX_LAYERED};
 use std::env;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
-#[derive(Default)]
+#[derive(Default, NwgUi)]
 pub struct HRViewer {
+    #[nwg_control(size: (100, 100), position: (300, 300), flags: "POPUP|VISIBLE", ex_flags: WS_EX_TOPMOST|WS_EX_LAYERED)]
+    #[nwg_events( OnInit: [HRViewer::setup_hr_thread], OnWindowClose: [HRViewer::close] )]
     window: nwg::Window,
+
+    #[nwg_layout(parent: window, margin: [0,0,0,0], spacing: 0)]
     layout: nwg::GridLayout,
+
+    #[nwg_resource(family: "Arial", size: 50, weight: 700)]
     font: nwg::Font,
-    hr: nwg::TextInput,
+    
+    #[nwg_control(text: "--", size: (100, 120), font: Some(&data.font), h_align: HTextAlign::Right, background_color: Some([255, 0, 0]))]
+    #[nwg_layout_item(layout: layout, row: 0, col: 0)]
+    hr: nwg::Label,
+
+    #[nwg_control]
+    #[nwg_events(OnNotice: [HRViewer::draw_hr])]
+    notice: nwg::Notice,
+
     hr_count: Arc<AtomicU8>,
 }
 
 impl HRViewer {
+
+    fn setup_hr_thread(&self) {
+        use winapi::um::winuser::{SetLayeredWindowAttributes, LWA_COLORKEY};
+        use winapi::um::wingdi::RGB;
+
+        let hr_notice = self.notice.sender();
+        let args: Vec<String> = env::args().collect();
+        if args.len() > 1 {
+            create_dummy_updater(self, hr_notice);
+        } else {
+            create_bt_updater(self, hr_notice).unwrap();
+        }
+
+        match self.window.handle {
+            nwg::ControlHandle::Hwnd(hwnd) => {
+                unsafe {
+                    SetLayeredWindowAttributes(hwnd, RGB(255, 0, 0), 0, LWA_COLORKEY);
+                }
+            }
+            _ => {
+                panic!("Bad handle type for window!")
+            }
+        }
+    }
+
     fn draw_hr(&self) {
         match self.hr_count.load(Ordering::SeqCst) {
             0 => {
@@ -33,138 +74,14 @@ impl HRViewer {
         }
     }
 
-    fn exit(&self) {
-        nwg::stop_thread_dispatch();
-    }
-}
-
-/*
- * This mostly is copy-pasted from the basic layout example:
- * https://github.com/gabdube/native-windows-gui/blob/master/native-windows-gui/examples/basic_layout.rs
- * There are nice macros to do most of this for you, but we need to do custom hacks so not an option
- */
-mod basic_app_ui {
-    use native_windows_gui as nwg;
-    use super::*;
-    use std::cell::RefCell;
-    use std::ops::Deref;
-    use nwg::{ControlBase, NwgError, HTextAlign};
-    use winapi::um::winuser::{WS_CLIPCHILDREN, WS_VISIBLE, WS_EX_TOPMOST, WS_EX_LAYERED, WS_POPUP, SetLayeredWindowAttributes, LWA_COLORKEY};
-    use winapi::um::wingdi::RGB;
-
-    pub struct HRViewerUi {
-        inner: Rc<HRViewer>,
-        default_handler: RefCell<Option<nwg::EventHandler>>
+    fn close(&self) {
+        nwg::stop_thread_dispatch()
     }
 
-    impl nwg::NativeUi<HRViewerUi> for HRViewer {
-        fn build_ui(mut data: HRViewer) -> Result<HRViewerUi, nwg::NwgError> {
-            use nwg::Event as E;
-
-            // Controls
-            data.window = Default::default();
-            data.window.handle = ControlBase::build_hwnd()
-                .class_name("NativeWindowsGuiWindow")
-                .forced_flags(WS_CLIPCHILDREN)
-                .ex_flags(WS_EX_TOPMOST | WS_EX_LAYERED)
-                .flags(WS_POPUP | WS_VISIBLE)
-                .size((100, 100))
-                //TODO: figure out how to not hardcode this
-                .position((1820, 1100))
-                .build()?;
-
-            nwg::Font::builder()
-                .family("Arial")
-                .size(50)
-                .weight(700)
-                .build(&mut data.font)?;
-
-            nwg::TextInput::builder()
-                .text("--")
-                .size((100, 120))
-                .parent(&data.window)
-                .font(Some(&data.font))
-                .align(HTextAlign::Right)
-                .background_color(Some([255, 0, 0]))
-                .readonly(true)
-                .build(&mut data.hr)?;
-
-            nwg::ControlBase::build_timer()
-                .parent(Some(data.window.handle))
-                .stopped(false)
-                .interval(500)
-                .build()?;
-
-
-            // Wrap-up
-            let ui = HRViewerUi {
-                inner: Rc::new(data),
-                default_handler: Default::default(),
-            };
-
-            // Events
-            let evt_ui = Rc::downgrade(&ui.inner);
-            let handle_events = move |evt, _evt_data, handle| {
-                if let Some(evt_ui) = evt_ui.upgrade() {
-                    match evt {
-                        E::OnTimerTick => {
-                                HRViewer::draw_hr(&evt_ui);
-                            }
-                        E::OnWindowClose =>
-                            if &handle == &evt_ui.window {
-                                HRViewer::exit(&evt_ui);
-                            },
-                        _ => {}
-                    }
-                }
-            };
-
-            *ui.default_handler.borrow_mut() = Some(nwg::full_bind_event_handler(&ui.window.handle, handle_events));
-
-            // Layouts
-            nwg::GridLayout::builder()
-                .parent(&ui.window)
-                .spacing(0)
-                .margin([0, 0, 0, 0])
-                .child(0, 0, &ui.hr)
-                .build(&ui.layout)?;
-
-            // We set the background color of the text box as red, mark as transparent
-            match ui.window.handle {
-                nwg::ControlHandle::Hwnd(hwnd) => {
-                    unsafe {
-                        SetLayeredWindowAttributes(hwnd, RGB(255, 0, 0), 0, LWA_COLORKEY);
-                    }
-                }
-                _ => {
-                    return Err(NwgError::InitializationError("??".to_string()));
-                }
-            }
-            return Ok(ui);
-        }
-    }
-
-    impl Drop for HRViewerUi {
-        /// To make sure that everything is freed without issues, the default handler must be unbound.
-        fn drop(&mut self) {
-            let handler = self.default_handler.borrow();
-            if handler.is_some() {
-                nwg::unbind_event_handler(handler.as_ref().unwrap());
-            }
-        }
-    }
-
-    impl Deref for HRViewerUi {
-        type Target = HRViewer;
-
-        fn deref(&self) -> &HRViewer {
-            &self.inner
-        }
-    }
 }
 
 // Very hacky - hardcodes the device type, doesn't handle disconnects etc
-fn create_bt_updater(viewer: &HRViewer) -> Result<(), &'static str> {
+fn create_bt_updater(viewer: &HRViewer, notice: nwg::NoticeSender) -> Result<(), &'static str> {
     let manager = Manager::new().map_err(|_e| "No manager")?;
     let adapters = manager.adapters().map_err(|_e| "Couldn't find adapter")?;
     let adapter = adapters.get(0).ok_or("Couldn't find adapter")?;
@@ -195,19 +112,21 @@ fn create_bt_updater(viewer: &HRViewer) -> Result<(), &'static str> {
             not.value[1]
         };
         count_atomic.store(hr, Ordering::SeqCst);
+        notice.notice();
     }));
     ohr.subscribe(hr_char).expect("Couldn't subscribe");
     Ok(())
 }
 
 // For basic UI testing. Just throws a bunch of data in the 0-199 range as a placeholder
-fn create_dummy_updater(viewer: &HRViewer) {
+fn create_dummy_updater(viewer: &HRViewer, notice: nwg::NoticeSender) {
     let count_atomic = viewer.hr_count.clone();
     thread::spawn(move || {
         let mut count: i64 = 0;
         loop {
             let r: u8 = (count % 200) as u8;
             count_atomic.store(r, Ordering::SeqCst);
+            notice.notice();
             thread::sleep(Duration::from_millis(100));
             count += 1;
         }
@@ -215,15 +134,7 @@ fn create_dummy_updater(viewer: &HRViewer) {
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    let viewer: HRViewer = Default::default();
-    if args.len() > 1 {
-        create_dummy_updater(&viewer);
-    } else {
-        create_bt_updater(&viewer).unwrap();
-    }
     nwg::init().expect("Failed to init Native Windows GUI");
-    let _ui = HRViewer::build_ui(viewer).expect("Failed to build UI");
-
+    let _ui = HRViewer::build_ui(Default::default()).expect("Failed to build UI");
     nwg::dispatch_thread_events();
 }
